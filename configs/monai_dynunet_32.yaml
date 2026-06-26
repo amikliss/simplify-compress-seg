@@ -1,0 +1,32 @@
+model: 'dynunet'
+# variables effected by dataset
+out_channels: 4
+checkpoint_dir: '../results/modelsMNM'
+checkpoint_path: "../results/modelsMNM/model-dynunet_2025-06-12-16-48.ckpt"
+# "../results/modelsMNM/model-dynunet_2025-06-05-14-43.ckpt" # filters from 32 to 256, with res blocks
+#../../pre-trained/monai-unets/pmri-siemens-11-27_26-11-2024.ckpt
+# mnmv2-ge-11-01_26-11-2024
+# mnmv2-siemens-10-41_26-11-2024
+# mnmv2-philips-11-16_26-11-2024
+# pmri-philips-18-24_26-11-2024
+# pmri-siemens-11-27_26-11-2024
+
+# variables not effected by dataset
+n_filters_init: [32,64,128,256] #[16,32,64,128]
+depth: 4
+spatial_dims: 2
+in_channels: 1
+lr: 1e-3
+patience: 5
+dropout: 0.0
+kernel_size: 3
+upsample_kernel_size: 2
+res_block: False
+
+ignore_index: None
+include_background: False
+loss: 'DiceCELoss'
+# infered
+# channels: [n_filters_init * 2 ** i for i in range(depth)]
+strides: [1,2,2,2]
+# binary_target: True if out_channels == 1 else False

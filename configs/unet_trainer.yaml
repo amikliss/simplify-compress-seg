@@ -1,0 +1,14 @@
+train_transforms: 'global_transforms'
+limit_train_batches: 100
+max_epochs: 1000
+early_stopping:
+  monitor: 'val_loss'
+  mode: "min"
+  # infered: patience
+model_checkpoint:
+  save_top_k: 1
+  dirpath: '../models'
+  monitor: 'val_loss'
+  # infered: filename
+logging: True
+include_background: False

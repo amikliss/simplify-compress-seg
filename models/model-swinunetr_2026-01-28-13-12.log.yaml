@@ -1,0 +1,49 @@
+filename: model-swinunetr_2026-01-28-13-12
+model_config:
+  model: swinunetr
+  out_channels: 4
+  checkpoint_dir: ../results/modelsMNM
+  checkpoint_path: ../results/modelsMNM/model-swinunetr_2025-06-12-16-25.ckpt
+  img_size: 256
+  spatial_dims: 2
+  in_channels: 1
+  depths:
+  - 2
+  - 2
+  - 2
+  - 2
+  num_heads:
+  - 2
+  - 4
+  - 8
+  - 16
+  feature_size: 12
+  lr: 0.001
+  patience: 5
+  norm: instance
+  hausdorff_sigma: 1.6761
+  dropout: 0.0
+  include_background: false
+  ignore_index: None
+  loss: DiceCELoss
+trainer_config:
+  train_transforms: global_transforms
+  limit_train_batches: 100
+  max_epochs: 1000
+  early_stopping:
+    monitor: val_loss
+    mode: min
+  model_checkpoint:
+    save_top_k: 1
+    dirpath: ../results/modelsMNM
+    monitor: val_loss
+  logging: true
+  include_background: false
+split: disease
+dataset:
+  Datas: !!python/name:data_utils.MNMv2DataModule ''
+  batch_size: 16
+  data_dir: ../data/MNM/
+  split: disease
+  normalization: instanceNormSlice
+  mean_std: null

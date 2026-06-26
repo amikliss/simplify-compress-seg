@@ -1,0 +1,49 @@
+filename: model-dynunet_2026-01-28-12-58
+model_config:
+  model: dynunet
+  out_channels: 4
+  checkpoint_dir: ../results/modelsMNM
+  checkpoint_path: ../results/modelsMNM/model-dynunet_2025-06-12-16-48.ckpt
+  n_filters_init:
+  - 32
+  - 64
+  - 128
+  - 256
+  depth: 4
+  spatial_dims: 2
+  in_channels: 1
+  lr: 0.001
+  patience: 5
+  dropout: 0.0
+  kernel_size: 3
+  upsample_kernel_size: 2
+  res_block: false
+  ignore_index: None
+  include_background: false
+  loss: DiceCELoss
+  strides:
+  - 1
+  - 2
+  - 2
+  - 2
+trainer_config:
+  train_transforms: global_transforms
+  limit_train_batches: 100
+  max_epochs: 1000
+  early_stopping:
+    monitor: val_loss
+    mode: min
+  model_checkpoint:
+    save_top_k: 1
+    dirpath: ../results/modelsMNM
+    monitor: val_loss
+  logging: true
+  include_background: false
+split: disease
+dataset:
+  Datas: !!python/name:data_utils.MNMv2DataModule ''
+  batch_size: 16
+  data_dir: ../data/MNM/
+  split: disease
+  normalization: instanceNormSlice
+  mean_std: null
