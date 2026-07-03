@@ -5,6 +5,10 @@ import torch
 import pywt
 from skimage.color import rgb2hsv, hsv2rgb
 
+from PIL import Image
+from torchvision.transforms.functional import to_pil_image, pil_to_tensor
+import torchvision.transforms as transforms
+
 class SimplificationStrategy(ABC):
     name = "base"
 
@@ -52,6 +56,30 @@ class WaveletSimplification(SimplificationStrategy):
         simplified_image = torch.from_numpy(simplified_image).permute(
             2, 0, 1).to(image.device).float()
         return simplified_image
+
+    def restore(self, simplified_image):
+        # Implement wavelet_ restoration logic here
+        pass
+
+
+class ColorQuantizationSimplification(SimplificationStrategy):
+    def __init__(self, colors=128, lamb_mul=0.75):
+        self.name = "color_quantization"
+        self.colors = colors
+        self.lamb_mul = lamb_mul
+
+    def simplify(self, image):
+        
+        im_q = to_pil_image(image)
+        simplified_image = im_q.quantize(colors=self.colors)
+        self.colors = np.clip(int(self.colors * self.lamb_mul), 1, 1000)
+
+        # Convert palette/indexed images back to RGB before tensor conversion.
+        simplified_image = simplified_image.convert("RGB")
+        transform = transforms.Compose([
+            transforms.ToTensor()
+        ])
+        return transform(simplified_image).to(image.device)
 
     def restore(self, simplified_image):
         # Implement wavelet_ restoration logic here
