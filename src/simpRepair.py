@@ -189,7 +189,7 @@ class SegmentRepairPipeline():
             # Simplification step
             print("last simp img shape:", last_simp_img.shape)
             simp_img = self.simp_strategy.simplify(last_simp_img)
-            self.all_simp_imgs.append(simp_img.detach().cpu().numpy())
+            self.all_simp_imgs.append(simp_img.detach().cpu())
 
             # prepare alpha parameter for optimization
             alpha_param = torch.full_like(simp_img[0], inital_alpha, requires_grad=True, device=self.device, dtype=torch.float)
@@ -199,7 +199,7 @@ class SegmentRepairPipeline():
             # get segmentation output for simplified image
             #simp_img_restored = self.simp_strategy.restore(simp_img)
             out_simp = self._get_output(simp_img, use_grad=False)
-            self.all_seg_simp.append(out_simp.detach().cpu().numpy())
+            self.all_seg_simp.append(out_simp.detach().cpu())
 
             dice_loss = self._calculate_dice_loss(out_simp, self.reference_output)
 
@@ -217,10 +217,10 @@ class SegmentRepairPipeline():
                                 max_it_opt=max_it_opt)
                 
                 last_simp_img = best_rep_img.clone().detach()
-                self.all_rep_imgs.append(best_rep_img.detach().cpu().numpy())
+                self.all_rep_imgs.append(best_rep_img.detach().cpu())
                 self.all_seg_rep.append(
-                    best_out_repaired.detach().cpu().numpy())
-                self.all_alphas.append(rep_alpha.detach().cpu().numpy())
+                    best_out_repaired.detach().cpu())
+                self.all_alphas.append(rep_alpha.detach().cpu())
 
                 plt.imshow(last_simp_img.permute(1, 2, 0).cpu().numpy())
                 plt.title(f"repaired image)")
@@ -239,5 +239,11 @@ class SegmentRepairPipeline():
                 # dice loss is good enough, so we can use the simplified image
                 last_simp_img = simp_img.clone().detach()
 
-        return {"all_simp_imgs":self.all_simp_imgs, "all_simp_seg": self.all_seg_simp, "all_rep_imgs":self.all_rep_imgs, "all_seg_rep": self.all_seg_rep, "all_alphas": self.all_alphas}
+        return {"org_input": self.img.detach().cpu(), 
+                "ref_seg": self.reference_output.detach().cpu(), 
+                "all_simp_imgs": self.all_simp_imgs, 
+                "all_simp_seg": self.all_seg_simp, 
+                "all_rep_imgs": self.all_rep_imgs, 
+                "all_seg_rep": self.all_seg_rep,
+                "all_alphas": self.all_alphas}
     
