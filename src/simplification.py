@@ -16,11 +16,6 @@ class SimplificationStrategy(ABC):
     def simplify(self, image):
         pass
 
-    # when performing simplification we may use another color space, so we need to restore the simplified image to the original color space before passing it to the segmentation model
-    @abstractmethod
-    def restore(self, simplified_image):
-        pass
-
 
 class WaveletSimplification(SimplificationStrategy):
     def __init__(self, levels=2, lamb_soft_thresholding_compression=0.2, lamb_mul=1.2, wavelet='bior3.7'):
@@ -56,10 +51,6 @@ class WaveletSimplification(SimplificationStrategy):
         simplified_image = torch.from_numpy(simplified_image).permute(
             2, 0, 1).to(image.device).float()
         return simplified_image
-
-    def restore(self, simplified_image):
-        # Implement wavelet_ restoration logic here
-        pass
 
 
 class ColorQuantizationSimplification(SimplificationStrategy):
