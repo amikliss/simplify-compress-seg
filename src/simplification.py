@@ -72,6 +72,21 @@ class ColorQuantizationSimplification(SimplificationStrategy):
         ])
         return transform(simplified_image).to(image.device)
 
-    def restore(self, simplified_image):
-        # Implement wavelet_ restoration logic here
-        pass
+
+class Uniform_Image(SimplificationStrategy):
+    def __init__(self):
+        self.name = "uniform_image"
+
+    def simplify(self, image):
+
+        r = image[0].mean()
+        g = image[1].mean()
+        b = image[2].mean()
+
+        r_a = torch.full_like(image[0], r)
+        g_a = torch.full_like(image[0], g)
+        b_a = torch.full_like(image[0], b)
+
+        img = torch.stack([r_a, g_a, b_a])
+
+        return img
