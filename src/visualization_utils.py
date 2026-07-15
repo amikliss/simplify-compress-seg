@@ -138,3 +138,50 @@ def visualizeSimplification(simpDict:dict,
         anim.save(f'{name}.mp4', writer=FFwriter)
 
     return HTML(anim.to_jshtml())
+
+
+def visualize_gradients(grad_history, name="gradient_history", save=False):
+
+    # First set up the figure with subplots
+    # Increased width for better layout
+    matplotlib.rcParams['animation.embed_limit'] = 2**128
+
+    fig, axes = plt.subplots(1, 3, figsize=(12, 3))
+    fig.suptitle("Iteration 0")
+
+    grad = axes[0].imshow(grad_history[0])
+    axes[0].set_title("Iteration 0")
+    axes[0].axis('off')
+
+    # mean
+    grad_mean = torch.stack(grad_history).mean(dim=0)
+    axes[1].imshow(grad_mean, cmap='viridis')
+    axes[1].set_title('Mean gradient')
+
+    # std
+    axes[2].imshow(torch.stack(grad_history).std(dim=0), cmap='hot')
+    axes[2].set_title('Gradient variance')
+
+    def animate(i):
+        fig.suptitle(f"Iteration {i}")
+
+        grad.set_array(grad_history[i])
+        axes[0].set_title(f"Iteration {i}")
+        axes[0].axis('off')
+
+        return [grad]
+
+    anim = matplotlib.animation.FuncAnimation(fig, animate,
+                                              frames=len(grad_history), interval=500, blit=True)
+
+    if save:
+        # To save the animation using Pillow as a gif
+        anim.save(f'{name}.gif', writer='pillow')
+
+        FFwriter = matplotlib.animation.FFMpegWriter(fps=10)
+        anim.save(f'{name}.mp4', writer=FFwriter)
+
+    return HTML(anim.to_jshtml())
+    
+
+
