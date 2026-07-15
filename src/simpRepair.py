@@ -15,16 +15,20 @@ class SegmentRepairPipeline():
                 img, 
                 strategy: Optional[SimplificationStrategy],
                 lr_opt = 0.01,
-                seg_pres_loss = "margin",):
+                seg_pres_loss = "margin",
+                gaussian = False):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = model.to(self.device)
         self.model.eval()
         self.img = img
         self.simp_strategy = strategy
         self.lr_opt = lr_opt
+        self.gaussian = gaussian
 
         self.reference_output = self._get_output(self.img, use_grad=False)
         self.reference_output_hard = self.reference_output.argmax(dim=0).long()
+
+        self.gaussian_blur = GaussianBlur(kernel_size=(13, 13), sigma=4)
 
         assert seg_pres_loss in ["maximize", "soft_dice", "margin"], "Choose a seg_pres_los! Options are: 'maximize', soft_dice', 'margin'."
 
@@ -161,7 +165,8 @@ class SegmentRepairPipeline():
         loss_tv = lambda_tv * self._tv_loss(alpha.unsqueeze(0))
 
         loss_simplification = - loss_alpha
-        loss_simplification += loss_tv
+        if not self.gaussian:
+            loss_simplification += loss_tv
 
         #loss = dice_weight * dice_loss + loss_simplification
         loss = dice_weight * seg_pres_loss + loss_simplification
