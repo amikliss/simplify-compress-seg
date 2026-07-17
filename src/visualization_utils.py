@@ -41,7 +41,7 @@ def visualizeSimplification(simpDict:dict,
     # Increased width for better layout
     matplotlib.rcParams['animation.embed_limit'] = 2**128
 
-    fig, axes = plt.subplots(3, 3, figsize=(9, 12))
+    fig, axes = plt.subplots(3, 3, figsize=(9, 9))
     fig.suptitle("Iteration 0")
 
     #prepare inputs for plotting
@@ -92,6 +92,8 @@ def visualizeSimplification(simpDict:dict,
     axes[2, 1].axis('off')
 
     axes[2, 2].axis('off')
+
+    plt.tight_layout()
 
 
     # Animation function
