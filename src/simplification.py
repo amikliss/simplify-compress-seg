@@ -8,6 +8,8 @@ from skimage.color import rgb2hsv, hsv2rgb
 from PIL import Image
 from torchvision.transforms.functional import to_pil_image, pil_to_tensor
 import torchvision.transforms as transforms
+from torchvision.transforms import GaussianBlur
+
 
 class SimplificationStrategy(ABC):
     name = "base"
@@ -90,3 +92,16 @@ class Uniform_Image(SimplificationStrategy):
         img = torch.stack([r_a, g_a, b_a])
 
         return img
+
+class Gaussian_Blurr(SimplificationStrategy):
+    def __init__(self, sigma = 1, inc=2):
+        self.name = "gaussian_blurring"
+        self.sigma = sigma
+        self.inc = inc
+
+    def simplify(self, image):
+        k = 2 * int(self.sigma) +1
+        gaussian_blur = GaussianBlur(kernel_size=(k, k), sigma=self.sigma)
+        simp = gaussian_blur(image)
+        self.sigma = self.sigma * self.inc
+        return simp
