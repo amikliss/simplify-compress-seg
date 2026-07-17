@@ -5,7 +5,6 @@ import torchvision.transforms.functional as F
 import numpy as np
 from matplotlib import pyplot as plt
 from simplification import SimplificationStrategy
-
 from torchvision.transforms import GaussianBlur
 
 
@@ -140,7 +139,7 @@ class SegmentRepairPipeline():
 
         return pres_loss.mean()
     
-    def _calculate_loss(self, x, alpha, x_output, reference_output, lambda_tv, lambda_alpha, dice_weight=0.1):
+    def _calculate_loss(self, x, alpha, x_output, reference_output, lambda_tv, lambda_alpha, lambda_alpha_bias, dice_weight=0.1):
         """
                 Calculate the total loss for the repairing step, which includes the Dice loss, total variation loss, and the alpha term.
 
@@ -161,19 +160,21 @@ class SegmentRepairPipeline():
 
         dice_loss = self._calculate_dice_loss(x_output, self.reference_output)
 
-        loss_alpha = lambda_alpha * alpha.mean()
+        loss_alpha_simp = lambda_alpha * alpha.mean() # we want as much as possible from the simplified image
+        loss_alpha_bias = lambda_alpha_bias * (alpha * (1- alpha)).mean() #  we want to decide more for one or the other image
         loss_tv = lambda_tv * self._tv_loss(alpha.unsqueeze(0))
 
-        loss_simplification = - loss_alpha
+        loss_simplification = - loss_alpha_simp
+        loss_simplification += loss_alpha_bias
         if not self.gaussian:
             loss_simplification += loss_tv
 
         #loss = dice_weight * dice_loss + loss_simplification
         loss = dice_weight * seg_pres_loss + loss_simplification
 
-        return loss, seg_pres_loss, dice_loss, hard_dice_loss, loss_simplification, -loss_alpha, loss_tv
+        return loss, seg_pres_loss, dice_loss, hard_dice_loss, loss_simplification, -loss_alpha_simp, loss_alpha_bias, loss_tv
     
-    def _optimize_alpha(self, alpha_param, last_simp_img, simp_img, lambda_tv, lambda_alpha, dice_er, dice_weight=0.1, max_it_opt=500, patience=10):
+    def _optimize_alpha(self, alpha_param, last_simp_img, simp_img, lambda_tv, lambda_alpha, lambda_alpha_bias, dice_er, dice_weight=0.1, max_it_opt=500, patience=10):
 
         grad_history = []
 
@@ -193,6 +194,7 @@ class SegmentRepairPipeline():
                       "seg_pres_loss": [],
                       "loss_simplification": [],
                       "loss_alpha": [],
+                      "loss_alpha_bias": [],
                       "loss_tv": [],
                       }
 
@@ -213,8 +215,8 @@ class SegmentRepairPipeline():
                 repaired_img, use_grad=True)
 
             #calculate loss
-            loss, seg_pres_loss, dice_loss, hard_dice_loss, loss_simplification, loss_alpha, loss_tv = self._calculate_loss(
-                repaired_img, alpha, out_repaired, self.reference_output, lambda_tv, lambda_alpha, dice_weight)
+            loss, seg_pres_loss, dice_loss, hard_dice_loss, loss_simplification, loss_alpha, loss_alpha_bias, loss_tv = self._calculate_loss(
+                repaired_img, alpha, out_repaired, self.reference_output, lambda_tv, lambda_alpha, lambda_alpha_bias,  dice_weight)
             
             log_losses["total_loss"].append(loss.item())
             log_losses["hard_dice_loss"].append(hard_dice_loss.item())
@@ -223,6 +225,7 @@ class SegmentRepairPipeline():
             log_losses["loss_simplification"].append(
                 loss_simplification.item())
             log_losses["loss_alpha"].append(loss_alpha.item())
+            log_losses["loss_alpha_bias"].append(loss_alpha_bias.item())
             log_losses["loss_tv"].append(loss_tv.item())
 
             if (loss_simplification <= best_simp_loss) and (opt_it > 100):
@@ -266,6 +269,8 @@ class SegmentRepairPipeline():
         plt.plot(log_losses["loss_simplification"],
                  label="loss_simplification", alpha=0.7)
         plt.plot(log_losses["loss_alpha"], label="loss_alpha", alpha=0.7)
+        plt.plot(log_losses["loss_alpha_bias"],
+                 label="loss_alpha_bias", alpha=0.7)
         plt.plot(log_losses["loss_tv"], label="loss_tv", alpha=0.7)
         plt.plot(log_losses["total_loss"], label="total_loss", alpha=0.7)
         if best_iteration:
@@ -279,6 +284,7 @@ class SegmentRepairPipeline():
         plt.plot(log_losses["loss_simplification"],
                  label="loss_simplification", alpha=0.7)
         plt.plot(log_losses["loss_alpha"], label="loss_alpha", alpha=0.7)
+        plt.plot(log_losses["loss_alpha_bias"],label="loss_alpha_bias", alpha=0.7)
         plt.plot(log_losses["loss_tv"], label="loss_tv", alpha=0.7)
         if best_iteration:
             plt.plot(best_iteration,
@@ -288,8 +294,7 @@ class SegmentRepairPipeline():
 
         return best_repaired_img, best_out_repaired, best_alpha, best_dice_loss, best_simp_loss, best_total_loss, grad_history   
 
-
-    def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, inital_alpha=0.0, inital_dice_weight=0.01, patience=10):
+    def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, lambda_alpha_bias = 0.1, inital_alpha=0.0, inital_dice_weight=0.01, patience=10):
 
         # save intermediate results
         self.all_simp_imgs = [] # all simplified images (before repair)
@@ -304,7 +309,7 @@ class SegmentRepairPipeline():
 
         for i in range(max_simp_it):
             print("Simplification step", i)
-            # Simplification step
+            
             simp_img = self.simp_strategy.simplify(last_simp_img)
             self.all_simp_imgs.append(simp_img.detach().cpu())
 
@@ -327,6 +332,7 @@ class SegmentRepairPipeline():
                                 simp_img, 
                                 lambda_tv, 
                                 lambda_alpha, 
+                                lambda_alpha_bias,
                                 dice_er, 
                                 dice_weight=inital_dice_weight,
                                 max_it_opt=max_it_opt,
@@ -349,7 +355,7 @@ class SegmentRepairPipeline():
                 plt.imshow(last_simp_img.permute(1, 2, 0).cpu().numpy())
                 plt.title(f"repaired image hard dice {rep_dice_loss}")
                 plt.subplot(1,2,2)
-                plt.imshow(rep_alpha.detach().cpu())
+                plt.imshow(rep_alpha.detach().cpu(), cmap="RdBu", vmin = 0, vmax= 1)
                 plt.colorbar()
                 plt.title(f"alpha mask")
                 plt.show()
