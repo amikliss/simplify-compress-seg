@@ -93,6 +93,27 @@ class Uniform_Image(SimplificationStrategy):
 
         return img
 
+
+class Uniform_Background(SimplificationStrategy):
+    def __init__(self, hard_reference_labels):
+        self.name = "uniform_background"
+        self.hard_labels = hard_reference_labels
+
+    def simplify(self, image):
+
+        r = image[0].mean()
+        g = image[1].mean()
+        b = image[2].mean()
+
+        simp = image.clone()
+
+        simp[0, self.hard_labels == 0] = r
+        simp[1, self.hard_labels == 0] = g
+        simp[2, self.hard_labels == 0] = b
+
+        return simp
+
+
 class Gaussian_Blurr(SimplificationStrategy):
     def __init__(self, sigma = 1, inc=2):
         self.name = "gaussian_blurring"
