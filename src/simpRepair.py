@@ -34,6 +34,11 @@ class SegmentRepairPipeline():
         self.gaussian_blur = GaussianBlur(kernel_size=(13, 13), sigma=4)
         self.median_filter = MedianPool2d(kernel_size=35, stride=1, same=True)
 
+        self.img_magnitude = self._compute_img_magnitude(self.img)
+
+        plt.imshow(self.img_magnitude.cpu().numpy())
+        plt.show()
+
         assert seg_pres_loss in ["maximize", "soft_dice", "margin"], "Choose a seg_pres_los! Options are: 'maximize', soft_dice', 'margin'."
 
         self.seg_pres_loss = seg_pres_loss
@@ -55,13 +60,106 @@ class SegmentRepairPipeline():
         output = torch.nn.functional.softmax(output, dim=1).squeeze()
         return output
     
-    def _tv_loss(self, img):
-        """Compute the total variation loss of an image."""
-        dx = img[:, 1:, :] - img[:, :-1, :]
-        dy = img[:, :, 1:] - img[:, :, :-1]
+    # def _tv_loss(self, img):
+    #     """Compute the total variation loss of an image."""
+    #     dx = img[:, 1:, :] - img[:, :-1, :]
+    #     dy = img[:, :, 1:] - img[:, :, :-1]
 
-        #return (abs(dx).sum() + abs(dy).sum()) / (img.shape[-2] * img.shape[-1])
-        return dx.abs().mean() + dy.abs().mean()
+    #     print("sizes, dx, dy", dx.shape, dy.shape)
+
+    #     #return (abs(dx).sum() + abs(dy).sum()) / (img.shape[-2] * img.shape[-1])
+    #     return dx.abs().mean() + dy.abs().mean()
+    #     #return torch.sqrt(pow(dx,2) + pow(dy,2) + 1e-8).sum()
+
+    def _tv_loss(self,img):
+        """Compute the total variation loss of an image."""
+        dx = img[:,1:, :] - img[:,:-1, :]
+        dy = img[:,:, 1:] - img[:,:, :-1]
+
+        print("dx", dx.shape)
+
+        zeros = torch.zeros(1,1, img.shape[1]).to("cuda")
+
+        dx = torch.cat([dx, zeros], dim=1)
+        dy = torch.cat([dy, torch.zeros(1,img.shape[2], 1).to("cuda")], dim=2)
+        print(dx.shape)
+
+        print("sizes, dx, dy", dx.shape, dy.shape)
+
+        # return (abs(dx).sum() + abs(dy).sum()) / (img.shape[-2] * img.shape[-1])
+        # return dx.abs().mean() + dy.abs().mean()
+        return torch.sqrt(pow(dx, 2) + pow(dy, 2) + 1e-8).sum()
+    
+    
+    def _compute_img_magnitude(self, img, eps=1e-8):
+
+        if img.ndim != 3:
+            raise ValueError(f"Expected img shape (C, H, W), got {img.shape}")
+
+        # Convert image to one luminance-like channel for the edge map.
+        image_gray = img.mean(dim=0, keepdim=True).unsqueeze(0)  # (1, 1, H, W)
+
+        kx, ky = scharr_filter()
+        kx = kx.to(device=img.device, dtype=img.dtype).view(1, 1, 3, 3)
+        ky = ky.to(device=img.device, dtype=img.dtype).view(1, 1, 3, 3)
+
+        # Avoid artificial edges introduced by zero-padding at image boundaries.
+        image_gray = pad(image_gray, (1, 1, 1, 1), mode="replicate")
+
+        gx = conv2d(image_gray, kx)
+        gy = conv2d(image_gray, ky)
+
+        gradient_magnitude = torch.sqrt(gx.square() + gy.square() + eps)
+        gradient_magnitude = gradient_magnitude.squeeze(0).squeeze(0)  # (H, W)
+
+        return gradient_magnitude
+
+    
+    def _boundary_aware_tv_loss(self, gradient_magnitude, alpha, edge_weight=1.0):
+        """
+        Edge-aware total-variation loss for alpha.
+
+        Image edges receive lower smoothness penalties, allowing alpha
+        boundaries to align with image boundaries.
+
+        Args:
+            alpha: Mask/logit tensor with shape (H, W), (1, H, W), or (C, H, W).
+            edge_weight: Strength of edge preservation. Must be non-negative.
+            eps: Numerical-stability constant.
+
+        Returns:
+            Scalar tensor.
+        """
+
+        if alpha.ndim == 2:
+            alpha = alpha.unsqueeze(0)  # (1, H, W)
+        elif alpha.ndim != 3:
+            raise ValueError(
+                f"Expected alpha shape (H, W) or (C, H, W), got {alpha.shape}"
+            )
+
+        # Gradients of alpha, not img.
+        dx = alpha[:, 1:, :] - alpha[:, :-1, :]  # (C_alpha, H-1, W)
+        dy = alpha[:, :, 1:] - alpha[:, :, :-1]  # (C_alpha, H, W-1)
+
+        # Associate each forward difference with the edge magnitude at its start.
+        gm_dx = gradient_magnitude[:-1, :]  # (H-1, W)
+        gm_dy = gradient_magnitude[:, :-1]  # (H, W-1)
+
+        weight_dx = 1.0 / (1.0 + edge_weight * gm_dx)
+        weight_dy = 1.0 / (1.0 + edge_weight * gm_dy)
+
+        loss_x = (weight_dx.unsqueeze(0) * dx.abs()).mean()
+        loss_y = (weight_dy.unsqueeze(0) * dy.abs()).mean()
+
+        # plt.subplot(121)
+        # plt.imshow((weight_dx.unsqueeze(0) * dx.abs()).cpu().detach().squeeze())
+        # plt.subplot(122)
+        # plt.imshow((weight_dy.unsqueeze(0) * dy.abs()
+        #             ).cpu().detach().squeeze())
+        # plt.show()
+
+        return loss_x + loss_y
     
     def _to_one_hot(self, labels, num_classes):
         """Convert label maps of shape (H, W) to one-hot tensors of shape (C, H, W)."""
@@ -142,9 +240,9 @@ class SegmentRepairPipeline():
 
         pres_loss = torch.clamp(largest_other_prob - org_prob + margin, min=0.0)
 
-        return pres_loss.mean()
+        return pres_loss.sum()
     
-    def _calculate_loss(self, x, alpha, x_output, reference_output, lambda_tv, lambda_alpha, lambda_alpha_bias, dice_weight=0.1):
+    def _calculate_loss(self, x, alpha, x_output, reference_output, lambda_tv, lambda_alpha, lambda_alpha_bias, dice_weight=0.1, magnitude_edge_weight=1.0):
         """
                 Calculate the total loss for the repairing step, which includes the Dice loss, total variation loss, and the alpha term.
 
@@ -165,9 +263,10 @@ class SegmentRepairPipeline():
 
         dice_loss = self._calculate_dice_loss(x_output, self.reference_output)
 
-        loss_alpha_simp = lambda_alpha * alpha.mean() # we want as much as possible from the simplified image
-        loss_alpha_bias = lambda_alpha_bias * (alpha * (1- alpha)).mean() #  we want to decide more for one or the other image
+        loss_alpha_simp = lambda_alpha * alpha.sum() # we want as much as possible from the simplified image
+        loss_alpha_bias = lambda_alpha_bias * (alpha * (1- alpha)).sum() #  we want to decide more for one or the other image
         loss_tv = lambda_tv * self._tv_loss(alpha.unsqueeze(0))
+        #loss_tv = lambda_tv * self._boundary_aware_tv_loss(self.img_magnitude, alpha, edge_weight = magnitude_edge_weight)
 
         loss_simplification = - loss_alpha_simp
         loss_simplification += loss_alpha_bias
@@ -226,8 +325,16 @@ class SegmentRepairPipeline():
                 repaired_img, use_grad=True)
 
             #calculate loss
-            loss, seg_pres_loss, dice_loss, hard_dice_loss, loss_simplification, loss_alpha, loss_alpha_bias, loss_tv = self._calculate_loss(
-                repaired_img, alpha, out_repaired, self.reference_output, lambda_tv, lambda_alpha, lambda_alpha_bias,  dice_weight)
+            loss, seg_pres_loss, dice_loss, hard_dice_loss, loss_simplification, loss_alpha, loss_alpha_bias, loss_tv = self._calculate_loss( 
+                                            x = repaired_img, 
+                                            alpha= alpha, 
+                                            x_output=out_repaired, 
+                                            reference_output=self.reference_output, 
+                                            lambda_tv=lambda_tv, 
+                                            lambda_alpha=lambda_alpha, 
+                                            lambda_alpha_bias = lambda_alpha_bias, 
+                                            dice_weight=dice_weight, 
+                                            magnitude_edge_weight=lambda_magnitude_edge_weight)
             
             log_losses["total_loss"].append(loss.item())
             log_losses["hard_dice_loss"].append(hard_dice_loss.item())
@@ -303,9 +410,9 @@ class SegmentRepairPipeline():
         plt.legend()
         plt.show()
 
-        return best_repaired_img, best_out_repaired, best_alpha, best_dice_loss, best_simp_loss, best_total_loss, grad_history   
+        return best_repaired_img, best_out_repaired, best_alpha, best_dice_loss, best_simp_loss, best_total_loss, grad_history, alpha_history  
 
-    def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, lambda_alpha_bias = 0.1, inital_alpha=0.0, inital_dice_weight=0.01, patience=10):
+    def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, lambda_alpha_bias=0.1, inital_alpha=0.0, lambda_magnitude_edge_weight= 1.0, inital_dice_weight=0.01, patience=10):
 
         # save intermediate results
         self.all_simp_imgs = [] # all simplified images (before repair)
@@ -336,13 +443,15 @@ class SegmentRepairPipeline():
             # dice loss is not good enough, so we need to repair the simplified image
             if hard_dice > dice_er:
                 print("do repairing")
-                best_rep_img, best_out_repaired, rep_alpha, rep_dice_loss, rep_simp_loss, rep_total_loss, grad_history = self._optimize_alpha(alpha_param, 
-                                last_simp_img, 
-                                simp_img, 
-                                lambda_tv, 
-                                lambda_alpha, 
-                                lambda_alpha_bias,
-                                dice_er, 
+                best_rep_img, best_out_repaired, rep_alpha, rep_dice_loss, rep_simp_loss, rep_total_loss, grad_history, alpha_history = self._optimize_alpha(
+                                inital_alpha=inital_alpha,
+                                last_simp_img= last_simp_img, 
+                                simp_img= simp_img, 
+                                lambda_tv=lambda_tv, 
+                                lambda_alpha=lambda_alpha, 
+                                lambda_alpha_bias=lambda_alpha_bias,
+                                lambda_magnitude_edge_weight=lambda_magnitude_edge_weight,
+                                dice_er=dice_er, 
                                 dice_weight=inital_dice_weight,
                                 max_it_opt=max_it_opt,
                                 patience=patience)
