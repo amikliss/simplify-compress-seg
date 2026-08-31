@@ -1,11 +1,15 @@
 from typing import Optional
 import torch
 import torchvision.transforms.functional as F
+from torch.nn.functional import pad, conv2d
 
 import numpy as np
 from matplotlib import pyplot as plt
 from simplification import SimplificationStrategy
 from torchvision.transforms import GaussianBlur
+
+from filter import MedianPool2d, scharr_filter
+from torch import autograd
 
 
 class SegmentRepairPipeline():
@@ -28,6 +32,7 @@ class SegmentRepairPipeline():
         self.reference_output_hard = self.reference_output.argmax(dim=0).long()
 
         self.gaussian_blur = GaussianBlur(kernel_size=(13, 13), sigma=4)
+        self.median_filter = MedianPool2d(kernel_size=35, stride=1, same=True)
 
         assert seg_pres_loss in ["maximize", "soft_dice", "margin"], "Choose a seg_pres_los! Options are: 'maximize', soft_dice', 'margin'."
 
@@ -202,9 +207,15 @@ class SegmentRepairPipeline():
         for opt_it in range(max_it_opt):
             optimizer.zero_grad()
 
-            alpha = torch.clamp(alpha_param, 0, 1)
+            alpha = alpha_param + 0.1 * torch.rand(alpha_param.shape, requires_grad=True,
+               device=self.device)
+
+            alpha = torch.clamp(alpha, 0, 1)
             if self.gaussian:
                 alpha = self.gaussian_blur(alpha.unsqueeze(0)).squeeze(0)
+                        
+            #alpha = self.median_filter(alpha.unsqueeze(0).unsqueeze(0)).squeeze()
+
 
             a_stacked = torch.stack([alpha] * 3, dim=0).to(self.device)
 
@@ -311,10 +322,8 @@ class SegmentRepairPipeline():
             print("Simplification step", i)
             
             simp_img = self.simp_strategy.simplify(last_simp_img)
+            simp_img = simp_img.to("cuda")
             self.all_simp_imgs.append(simp_img.detach().cpu())
-
-            # prepare alpha parameter for optimization
-            alpha_param = torch.full_like(last_simp_img[0], inital_alpha, requires_grad=True, device=self.device, dtype=torch.float)            
 
             # get segmentation output for simplified image
             out_simp = self._get_output(simp_img, use_grad=False)
