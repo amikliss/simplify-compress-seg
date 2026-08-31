@@ -9,6 +9,7 @@ from PIL import Image
 from torchvision.transforms.functional import to_pil_image, pil_to_tensor
 import torchvision.transforms as transforms
 from torchvision.transforms import GaussianBlur
+from skimage.restoration import denoise_bilateral
 
 
 class SimplificationStrategy(ABC):
@@ -122,7 +123,27 @@ class Gaussian_Blurr(SimplificationStrategy):
 
     def simplify(self, image):
         k = 2 * int(self.sigma) +1
+        if k > image.shape[1] or k > image.shape[2]:
+            k = min(image.shape[1], image.shape[2])
+            if k % 2 == 0:
+                k -= 1
         gaussian_blur = GaussianBlur(kernel_size=(k, k), sigma=self.sigma)
         simp = gaussian_blur(image)
         self.sigma = self.sigma * self.inc
         return simp
+    
+
+class Bilateral_Filter(SimplificationStrategy):
+    def __init__(self, sigma_color=0.02, sigma_spatial=5, bins=500, inc_sigma_color = 1.2):
+        self.name = "bilateral_filter"
+        self.sigma_color = sigma_color
+        self.sigma_spatial = sigma_spatial
+        self.bins = bins
+        self.inc_sigma_color = inc_sigma_color
+
+    def simplify(self, image):
+        filtered = denoise_bilateral(torch.moveaxis(image, 0, -1).cpu().numpy(
+        ), sigma_color=self.sigma_color, sigma_spatial=self.sigma_spatial, bins=self.bins, channel_axis=-1)
+        self.sigma_color = self.inc_sigma_color * self.sigma_color
+
+        return torch.moveaxis(torch.tensor(filtered), -1, 0)
