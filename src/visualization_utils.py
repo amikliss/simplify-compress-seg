@@ -82,7 +82,7 @@ def visualizeSimplification(simpDict:dict,
     axes[1, 2].axis('off')
 
     alphas = axes[2, 0].imshow(
-        simpDict["all_alphas"][0], interpolation='none', vmin= 0, vmax= 1)
+        simpDict["all_alphas"][0], interpolation='none', vmin=0, vmax=1, cmap='hot')
     axes[2, 0].set_title("Alpha mask")
     axes[2, 0].axis('off')
 
@@ -117,6 +117,7 @@ def visualizeSimplification(simpDict:dict,
         axes[1, 2].axis('off')
 
         alphas.set_array(simpDict["all_alphas"][i])
+        alphas.set_cmap('hot')
         axes[2, 0].set_title("Alpha mask")
         axes[2, 0].axis('off')
 
@@ -151,13 +152,15 @@ def visualize_gradients(grad_history, name="gradient_history", save=False):
     fig, axes = plt.subplots(1, 3, figsize=(12, 3))
     fig.suptitle("Iteration 0")
 
-    grad = axes[0].imshow(grad_history[0])
+    grad = axes[0].imshow(grad_history[0], cmap="coolwarm", vmin=-abs(
+        grad_history[0].max()), vmax=abs(grad_history[0].max()))
     axes[0].set_title("Iteration 0")
     axes[0].axis('off')
 
     # mean
     grad_mean = torch.stack(grad_history).mean(dim=0)
-    axes[1].imshow(grad_mean, cmap='viridis')
+    axes[1].imshow(grad_mean, cmap='coolwarm', vmin=-abs(
+        grad_history[0].max()), vmax=abs(grad_history[0].max()))
     axes[1].set_title('Mean gradient')
 
     # std
@@ -168,6 +171,8 @@ def visualize_gradients(grad_history, name="gradient_history", save=False):
         fig.suptitle(f"Iteration {i}")
 
         grad.set_array(grad_history[i])
+        grad.set_clim(
+            vmin=-abs(grad_history[i].max()), vmax=grad_history[i].max())
         axes[0].set_title(f"Iteration {i}")
         axes[0].axis('off')
 
