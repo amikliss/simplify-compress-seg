@@ -194,7 +194,7 @@ class SegmentRepairPipeline():
         # pick the reference-class probability at each wrong pixel
         probs = x_output[ref_labels, y, x]
 
-        return (1 - probs).sum()
+        return (1 - probs).mean()
     
 
     def _segmentation_preservation_loss_margin(self, x_output):
@@ -224,7 +224,7 @@ class SegmentRepairPipeline():
 
         pres_loss = torch.clamp(largest_other_prob - org_prob + margin, min=0.0)
 
-        return pres_loss.sum()
+        return pres_loss.mean()
     
     def _calculate_loss(self, x, alpha, x_output, reference_output, lambda_tv, lambda_alpha, lambda_alpha_bias, dice_weight=0.1, magnitude_edge_weight=1.0):
         """
@@ -243,12 +243,12 @@ class SegmentRepairPipeline():
         elif self.seg_pres_loss == "soft_dice":
             seg_pres_loss = self._calculate_dice_loss(x_output, self.reference_output)
 
-        print(f"use {self.seg_pres_loss}")
+        #print(f"use {self.seg_pres_loss}")
 
         dice_loss = self._calculate_dice_loss(x_output, self.reference_output)
 
-        loss_alpha_simp = lambda_alpha * alpha.sum() # we want as much as possible from the simplified image
-        loss_alpha_bias = lambda_alpha_bias * (alpha * (1- alpha)).sum() #  we want to decide more for one or the other image
+        loss_alpha_simp = lambda_alpha * alpha.mean() # we want as much as possible from the simplified image
+        loss_alpha_bias = lambda_alpha_bias * (alpha * (1- alpha)).mean() #  we want to decide more for one or the other image
         loss_tv = lambda_tv * self._tv_loss(alpha.unsqueeze(0))
         #loss_tv = lambda_tv * self._boundary_aware_tv_loss(self.img_magnitude, alpha, edge_weight = magnitude_edge_weight)
 
@@ -277,7 +277,7 @@ class SegmentRepairPipeline():
         no_improvement = 0
         best_iteration = None
 
-        log_losses = {"total_loss": [], 
+        log_losses = {"total_loss": [],
                       "hard_dice_loss": [],
                       "seg_pres_loss": [],
                       "loss_simplification": [],
