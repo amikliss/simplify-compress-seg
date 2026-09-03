@@ -59,36 +59,20 @@ class SegmentRepairPipeline():
             output = self.model(normalized_img)['out']
         output = torch.nn.functional.softmax(output, dim=1).squeeze()
         return output
-    
-    # def _tv_loss(self, img):
-    #     """Compute the total variation loss of an image."""
-    #     dx = img[:, 1:, :] - img[:, :-1, :]
-    #     dy = img[:, :, 1:] - img[:, :, :-1]
-
-    #     print("sizes, dx, dy", dx.shape, dy.shape)
-
-    #     #return (abs(dx).sum() + abs(dy).sum()) / (img.shape[-2] * img.shape[-1])
-    #     return dx.abs().mean() + dy.abs().mean()
-    #     #return torch.sqrt(pow(dx,2) + pow(dy,2) + 1e-8).sum()
 
     def _tv_loss(self,img):
         """Compute the total variation loss of an image."""
         dx = img[:,1:, :] - img[:,:-1, :]
         dy = img[:,:, 1:] - img[:,:, :-1]
 
-        print("dx", dx.shape)
-
         zeros = torch.zeros(1,1, img.shape[1]).to("cuda")
 
         dx = torch.cat([dx, zeros], dim=1)
         dy = torch.cat([dy, torch.zeros(1,img.shape[2], 1).to("cuda")], dim=2)
-        print(dx.shape)
-
-        print("sizes, dx, dy", dx.shape, dy.shape)
 
         # return (abs(dx).sum() + abs(dy).sum()) / (img.shape[-2] * img.shape[-1])
         # return dx.abs().mean() + dy.abs().mean()
-        return torch.sqrt(pow(dx, 2) + pow(dy, 2) + 1e-8).sum()
+        return torch.sqrt(pow(dx, 2) + pow(dy, 2) + 1e-8).mean()
     
     
     def _compute_img_magnitude(self, img, eps=1e-8):
