@@ -6,7 +6,6 @@ from torch.nn.functional import pad, conv2d, interpolate
 import numpy as np
 from matplotlib import pyplot as plt
 from simplification import SimplificationStrategy
-from torchvision.transforms import GaussianBlur
 
 from filter import MedianPool2d, scharr_filter
 from torch import autograd
@@ -18,20 +17,17 @@ class SegmentRepairPipeline():
                 img, 
                 strategy: Optional[SimplificationStrategy],
                 lr_opt = 0.01,
-                seg_pres_loss = "margin",
-                gaussian = False):
+                seg_pres_loss = "margin"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = model.to(self.device)
         self.model.eval()
         self.img = img
         self.simp_strategy = strategy
         self.lr_opt = lr_opt
-        self.gaussian = gaussian
 
         self.reference_output = self._get_output(self.img, use_grad=False)
         self.reference_output_hard = self.reference_output.argmax(dim=0).long()
 
-        self.gaussian_blur = GaussianBlur(kernel_size=(13, 13), sigma=4)
         self.median_filter = MedianPool2d(kernel_size=35, stride=1, same=True)
 
         self.img_magnitude = self._compute_img_magnitude(self.img)
@@ -254,8 +250,7 @@ class SegmentRepairPipeline():
 
         loss_simplification = - loss_alpha_simp
         loss_simplification += loss_alpha_bias
-        if not self.gaussian:
-            loss_simplification += loss_tv
+        loss_simplification += loss_tv
 
         #loss = dice_weight * dice_loss + loss_simplification
         loss = dice_weight * seg_pres_loss + loss_simplification
@@ -312,33 +307,31 @@ class SegmentRepairPipeline():
         res_it = []
         for opt_it in range(max_it_opt):
             
-            if ((opt_it % 100) ==0):
-                res_it.append(opt_it)
-                diffs_simp_loss = torch.tensor(log_losses["loss_simplification"][-100:-1]) - torch.tensor(log_losses["loss_simplification"][-99:])
-                #if sum(diffs_simp_loss)  < 0.01:
-                print(f"Make resolution bigger at iteration {opt_it}")
-                f = f - 2
-                if f <= 2:
-                    f = 2
+            if ((opt_it % 50) ==0) & (opt_it > 100) & (f > 2):
+                diffs_simp_loss = torch.tensor(log_losses["loss_simplification"][-50:-1]) - torch.tensor(log_losses["loss_simplification"][-49:])
+                if sum(diffs_simp_loss)  < 0.01:
+                    res_it.append(opt_it)
+                    f = f - 2
+                    if f <= 2:
+                        f = 2
 
-                new_res = list(old_resolution // f)
-                alpha_param = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(
-                    new_res[0], new_res[1]), mode="bilinear").squeeze().detach().requires_grad_()
+                    new_res = list(old_resolution // f)
+                    print(f"Make resolution bigger at iteration {opt_it}. New resolution is {new_res}.")
+                    alpha_param = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(
+                        new_res[0], new_res[1]), mode="bilinear").squeeze().detach().requires_grad_()
 
-                # plt.imshow(alpha_param.clone().cpu().detach().numpy())
-                # plt.colorbar()
-                # plt.show()
-                optimizer = torch.optim.AdamW(
-                    [alpha_param], lr=self.lr_opt
-                    )
+                    # plt.imshow(alpha_param.clone().cpu().detach().numpy())
+                    # plt.colorbar()
+                    # plt.show()
+                    optimizer = torch.optim.AdamW(
+                        [alpha_param], lr=self.lr_opt
+                        )
 
             optimizer.zero_grad()
             #alpha = alpha_param + 0.1 * torch.rand(alpha_param.shape, requires_grad=True,
             #                                       device=self.device)
 
             alpha = torch.clamp(alpha_param, 0, 1)
-            if self.gaussian:
-                alpha = self.gaussian_blur(alpha.unsqueeze(0)).squeeze(0)
 
             # alpha = self.median_filter(alpha.unsqueeze(0).unsqueeze(0)).squeeze()
 
@@ -374,30 +367,34 @@ class SegmentRepairPipeline():
             log_losses["loss_alpha_bias"].append(loss_alpha_bias.item())
             log_losses["loss_tv"].append(loss_tv.item())
 
+            print("seg_pres_loss", seg_pres_loss)
+
+
+
             if (loss_simplification <= best_simp_loss):  # and (opt_it > 100):
-                if hard_dice_loss <= dice_er:
-                    best_dice_loss = hard_dice_loss
+                if seg_pres_loss <= dice_er:
+                    best_seg_pres_loss = seg_pres_loss
                     best_simp_loss = loss_simplification
                     best_total_loss = loss
                     best_repaired_img = repaired_img.clone().detach()
                     best_alpha = alpha.clone().detach()
                     best_out_repaired = out_repaired.clone().detach()
                     best_iteration = opt_it
-
-                if ((loss_simplification - best_simp_loss) >= 1e-8):
+                if (abs(loss_simplification - best_simp_loss) >= 5e-3):
                     no_improvement = 0
+                else:
+                    no_improvement += 1
             else:
                 if opt_it > 100:
                     no_improvement += 1
-            if (hard_dice_loss > dice_er):
+            if (seg_pres_loss > dice_er):
                 dice_weight *= 1.1
                 dice_weight = np.clip(dice_weight, 0., 1000.0)
-                #print(f"increase dice weight to {dice_weight}")
+                print(f"increase dice weight to {dice_weight}")
             else:
                 dice_weight *= 0.9
-                #print(f"decrease dice weight to {dice_weight}")
-
-            if (no_improvement >= patience) & opt_it > 400:
+                print(f"decrease dice weight to {dice_weight}")
+            if (no_improvement >= patience) & (opt_it > 100) & (f == 2):
                 print(
                     f"No improvement in Dice and loss for {no_improvement} iterations, stopping.")
                 break
@@ -497,8 +494,10 @@ class SegmentRepairPipeline():
             optimizer.step()
         print("increase res it", res_it)
 
-        plt.plot(log_losses["hard_dice_loss"],
-                 label="hard_dice_loss", alpha=0.7)
+        # plt.plot(log_losses["hard_dice_loss"],
+        #          label="hard_dice_loss", alpha=0.7)
+
+        
         plt.plot(log_losses["seg_pres_loss"], label="seg_pres_loss", alpha=0.7)
         plt.plot(log_losses["loss_simplification"],
                  label="loss_simplification", alpha=0.7)
@@ -509,7 +508,9 @@ class SegmentRepairPipeline():
         plt.plot(log_losses["total_loss"], label="total_loss", alpha=0.7)
         if best_iteration:
             plt.plot(
-                best_iteration, log_losses["loss_simplification"][best_iteration], "x", label=f"best iteration {best_iteration}")
+                best_iteration, log_losses["loss_simplification"][best_iteration], "o", label=f"best iteration {best_iteration}")
+        plt.plot(
+            res_it, np.array(log_losses["loss_simplification"])[res_it], "x", label=f"increase resolution")
         plt.legend()
         plt.show()
 
@@ -527,7 +528,7 @@ class SegmentRepairPipeline():
         plt.legend()
         plt.show()
 
-        return best_repaired_img, best_out_repaired, best_alpha, best_dice_loss, best_simp_loss, best_total_loss, grad_history, alpha_history
+        return best_repaired_img, best_out_repaired, best_alpha, best_seg_pres_loss, best_simp_loss, best_total_loss, grad_history, alpha_history
 
     def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, lambda_alpha_bias=0.1, inital_alpha=0.0, lambda_magnitude_edge_weight= 1.0, inital_dice_weight=0.01, patience=10):
 
@@ -554,14 +555,14 @@ class SegmentRepairPipeline():
             out_simp = self._get_output(simp_img, use_grad=False)
             self.all_seg_simp.append(out_simp.detach().cpu())
 
-            hard_dice = self._calculate_hard_dice_loss(out_simp, self.reference_output_hard)
+            seg_pres_loss = self._segmentation_preservation_loss_margin(out_simp)
+            print("seg pres loss", seg_pres_loss)
 
-            #soft_dice = self._calculate_dice_loss(out_simp, self.reference_output)
 
-            # dice loss is not good enough, so we need to repair the simplified image
-            if hard_dice > dice_er:
+            # segmentation preservation loss is not good enough, so we need to repair the simplified image
+            if seg_pres_loss > dice_er:
                 print("do repairing")
-                best_rep_img, best_out_repaired, rep_alpha, rep_dice_loss, rep_simp_loss, rep_total_loss, grad_history, alpha_history = self._optimize_alpha_multi_res(
+                best_rep_img, best_out_repaired, rep_alpha, rep_seg_pres_loss, rep_simp_loss, rep_total_loss, grad_history, alpha_history = self._optimize_alpha_multi_res(
                                 inital_alpha=inital_alpha,
                                 last_simp_img= last_simp_img, 
                                 simp_img= simp_img, 
@@ -575,7 +576,7 @@ class SegmentRepairPipeline():
                                 patience=patience)
                 
                 # if dice is not good enough after repairing, let's stop
-                if rep_dice_loss > dice_er:
+                if rep_seg_pres_loss > dice_er:
                     print(
                         "Best dice loss after repair is still not good enough, stopping simplification procedure.")
                     break
@@ -591,7 +592,7 @@ class SegmentRepairPipeline():
                 plt.figure(figsize=(15, 5))
                 plt.subplot(1,3,1)
                 plt.imshow(last_simp_img.permute(1, 2, 0).cpu().numpy())
-                plt.title(f"repaired image hard dice {rep_dice_loss}")
+                plt.title(f"rep_seg_pres_loss {rep_seg_pres_loss}")
                 plt.subplot(1,3,2)
                 plt.imshow(rep_alpha.detach().cpu(), cmap="hot", vmin = 0, vmax= 1)
                 plt.colorbar()
