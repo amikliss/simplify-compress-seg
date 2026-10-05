@@ -53,7 +53,7 @@ class WaveletSimplification(SimplificationStrategy):
         simplified_image = hsv2rgb(hsv_image)
         simplified_image = torch.from_numpy(simplified_image).permute(
             2, 0, 1).to(image.device).float()
-        return simplified_image
+        return simplified_image.to(image.device)
 
 
 class ColorQuantizationSimplification(SimplificationStrategy):
@@ -115,7 +115,7 @@ class Uniform_Background(SimplificationStrategy):
         return simp
 
 
-class Gaussian_Blurr(SimplificationStrategy):
+class Gaussian_Blur(SimplificationStrategy):
     def __init__(self, sigma = 1, inc=2):
         self.name = "gaussian_blurring"
         self.sigma = sigma

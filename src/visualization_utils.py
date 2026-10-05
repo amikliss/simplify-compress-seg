@@ -91,6 +91,10 @@ def visualizeSimplification(simpDict:dict,
     axes[2, 1].set_title("Rep_Seg - Reference")
     axes[2, 1].axis('off')
 
+    overlay = axes[2, 2].imshow(rep_imgs[0], interpolation='none')
+    overlay = axes[2, 2].imshow(simpDict["all_alphas"][0], interpolation='none', vmin=0, vmax=1, cmap='hot', alpha=0.5)
+    axes[2,2].set_title("Overlay alpha")
+
     axes[2, 2].axis('off')
 
     plt.tight_layout()
@@ -125,6 +129,11 @@ def visualizeSimplification(simpDict:dict,
         diffs.set_array(d)
         axes[2, 1].set_title("Rep_Seg - Reference")
         axes[2, 1].axis('off')
+
+        overlay.set_array(simpDict["all_alphas"][i])
+        overlay.set_alpha(0.5)
+        overlay.set_cmap('hot')
+        axes[2, 2].set_title("Overlay alpha")
 
         axes[2, 2].axis('off')
 
