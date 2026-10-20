@@ -277,12 +277,13 @@ class SegmentRepairPipeline():
 
         # prepare alpha parameter for optimization
 
+        lr = self.lr_opt
+
         inital_dice_weight = dice_weight
 
         old_resolution = torch.tensor(last_simp_img[0].shape)
-        f = 20
-        new_res = list(old_resolution // f)
-
+        f = 4
+        new_res = list(old_resolution // (2**f))
 
         alpha_param = torch.full(
             new_res, inital_alpha, requires_grad=True, device=self.device, dtype=torch.float)
@@ -294,33 +295,34 @@ class SegmentRepairPipeline():
         grad_history = []
         alpha_history = []
 
-        optimizer_name = "SGD"
+        optimizer_name = "Adam"
 
         print(f"Using optimizer {optimizer_name} with learning rate {self.lr_opt}")
 
         def make_optimizer(parameters):
             if optimizer_name == "LBFGS":
                 return torch.optim.LBFGS(
-                    parameters, lr=self.lr_opt, max_iter=20, history_size=50)
+                    parameters, lr=lr, max_iter=20, history_size=50)
             if optimizer_name == "AdamW":
                 return torch.optim.AdamW(
-                    parameters, lr=self.lr_opt, weight_decay=.1)
+                    parameters, lr=lr, weight_decay=.1)
+            if optimizer_name == "Adam":
+                return torch.optim.Adam(
+                    parameters, lr=lr)
             if optimizer_name == "RMSprop":
                 return torch.optim.RMSprop(
-                    parameters, lr=self.lr_opt, alpha=0.9, weight_decay=.1)
+                    parameters, lr=lr, alpha=0.9, weight_decay=.1)
             if optimizer_name == "Adadelta":
-                return torch.optim.Adadelta(parameters, lr=self.lr_opt)
+                return torch.optim.Adadelta(parameters, lr=lr)
             if optimizer_name == "SGD":
-                return torch.optim.SGD(parameters, lr=self.lr_opt, momentum=0.9)
+                return torch.optim.SGD(parameters, lr=lr, momentum=0.9)
             raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
         #optimizer = torch.optim.AdamW([alpha_param], lr=self.lr_opt, weight_decay=.1)
         #optimizer = torch.optim.RMSprop([alpha_param], lr=self.lr_opt, alpha=0.9, weight_decay=.1)
         # optimizer = torch.optim.Adadelta([alpha_param], lr=self.lr_opt)
         optimizer = make_optimizer([alpha_param])
-        #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=20, threshold=1e-5, threshold_mode="abs")
-
-        current_lr = self.lr_opt
+        #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=40, threshold=1e-15, threshold_mode="rel")
 
         best_simp_loss = torch.inf
         best_out_repaired = None
@@ -331,6 +333,7 @@ class SegmentRepairPipeline():
         best_seg_pres_loss = None
         no_improvement = 0
         best_iteration = None
+        scale_history = []
 
         log_losses = {"total_loss": [],
                       "hard_dice_loss": [],
@@ -351,6 +354,7 @@ class SegmentRepairPipeline():
 
         res_it = []
         lrs = []
+        ema_loss_history = []
         for opt_it in range(max_it_opt):
 
             closure_state = {}
@@ -361,20 +365,35 @@ class SegmentRepairPipeline():
                 #alpha = torch.clamp(alpha_param, 0, 1)
                 #alpha = torch.sigmoid(alpha_param)
 
-                alpha = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(old_resolution[0],old_resolution[1]), mode="bilinear").squeeze()
 
-                a_stacked = torch.stack([alpha] * 3, dim=0).to(self.device)
+                # alpha = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=list(
+                #         old_resolution // 2), mode="bilinear")
+
+                alpha = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(
+                    old_resolution[0], old_resolution[1]), mode="bilinear").squeeze()
+                
+                if len(scale_history) != 0:
+                    summed_alphas = torch.stack(scale_history).sum(dim=0) + alpha
+                else:
+                    summed_alphas = alpha
+
+                summed_alphas = summed_alphas.clamp(0,1)
+                # alpha = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(
+                #     old_resolution[0], old_resolution[1]), mode="bilinear").squeeze()
+
+                a_stacked = torch.stack([summed_alphas] * 3, dim=0).to(self.device)
+
 
                 repaired_img = last_simp_img * \
                     (1 - a_stacked) + simp_img * a_stacked
 
                 out_repaired = self._get_output(
-                    repaired_img, use_grad=True)
+                    repaired_img, use_grad=True, noise = True, rand_noise=0.6)
 
                 # calculate loss
                 losses = self._calculate_loss(
                     x=repaired_img,
-                    alpha=alpha,
+                    alpha=summed_alphas,
                     x_output=out_repaired,
                     reference_output=self.reference_output,
                     lambda_tv=lambda_tv,
@@ -384,7 +403,7 @@ class SegmentRepairPipeline():
                     magnitude_edge_weight=lambda_magnitude_edge_weight)
                 losses[0].backward(retain_graph=True)
                 closure_state.update(
-                    alpha=alpha,
+                    alpha=summed_alphas,
                     repaired_img=repaired_img,
                     out_repaired=out_repaired,
                     losses=losses)
@@ -414,6 +433,10 @@ class SegmentRepairPipeline():
 
             print("seg_pres_loss", seg_pres_loss)
 
+            if alpha_param.grad is not None:
+                loss_grad = alpha_param.grad.detach().cpu().clone()
+                grad_history.append(loss_grad)
+                alpha_history.append(alpha.detach().cpu().clone())
 
             print("iteration", opt_it, "loss simplification", loss_simplification, "best simp loss", best_simp_loss, " at iteration", best_iteration)
             if (loss_simplification <= best_simp_loss):  # and (opt_it > 100):
@@ -422,7 +445,7 @@ class SegmentRepairPipeline():
                 print("diff best simp and current simp",
                       loss_simplification - best_simp_loss)
                 
-                if abs(loss_simplification - best_simp_loss) < 1e-3:
+                if abs(loss_simplification - best_simp_loss) < 1e-4:
                     no_improvement += 1
                 else:
                     no_improvement = 0
@@ -432,6 +455,7 @@ class SegmentRepairPipeline():
                     best_total_loss = loss
                     best_repaired_img = repaired_img.clone().detach()
                     best_alpha = alpha.clone().detach()
+                    best_alpha_param = alpha_param.clone().detach()
                     best_out_repaired = out_repaired.clone().detach()
                     best_iteration = opt_it
                     log_losses["best_loss_history"].append(opt_it)
@@ -441,8 +465,8 @@ class SegmentRepairPipeline():
                     
                 
             else:
-                if opt_it > 100:
-                    no_improvement += 1
+                #if opt_it > 100:
+                no_improvement += 1
 
 
             print("no_improvement", no_improvement)
@@ -455,174 +479,80 @@ class SegmentRepairPipeline():
             else:
                 ema_loss = 0.8 * ema_loss + (1- 0.8) * current_seg_pres_loss
                 #ema_loss = current_seg_pres_loss
+            ema_loss_history.append(ema_loss)
+
+            print("inital lr", self.lr_opt)
+            # if (weight_cooldown <= 0) & ( lr < self.lr_opt):
+            #     print("increase lr")
+            #     lr = lr * 10
+            #     for g in optimizer.param_groups:
+            #         g['lr'] = lr
 
             if weight_cooldown > 0:
                 weight_cooldown -= 1
-            elif ema_loss > (dice_er):
+            elif ema_loss > (dice_er - 0.00001):
                 error_ratio = ema_loss / dice_er
 
-                growth = error_ratio
+                growth = min(error_ratio, 1.5)
 
-                # if error_ratio > 3:
-                #     growth = 1.4
-                # else:
-                #     growth = 1.2
-                # dice_weight * growth #
-                dice_weight = dice_weight * growth # min(dice_weight * growth, 10000000.0) 
+                dice_weight = min(dice_weight * growth, 10000) # min(dice_weight * growth, 10000000.0) 
                 weight_cooldown = weight_update_interval
                 print(f"increase dice weight to {dice_weight}")
-            elif ema_loss < (dice_er * 0.8):
-                growth = ema_loss / (dice_er * 0.8)
-                dice_weight = max(dice_weight * 0.9, 0.0)
-                weight_cooldown = weight_update_interval
-                print(f"decrease dice weight to {dice_weight}")
-
-            # if opt_it > 10:
-            #     diff_seg_pres = log_losses["raw_seg_pres_loss"][-1] - \
-            #         log_losses["raw_seg_pres_loss"][-2]
-            #     print("diff last seg_pres_los", diff_seg_pres)
-            #     if (seg_pres_loss > dice_er) & ((log_losses["raw_seg_pres_loss"][-1] - log_losses["raw_seg_pres_loss"][-2]) < (dice_er * 0.001)):
-            #             dice_weight *= 1.1
-                        
-            #             dice_weight = np.clip(dice_weight, 0., 1000.0)
-            #             print(f"increase dice weight to {dice_weight}")
-            #             weight_patience = 0
-
-                # else:
-                #     dice_weight *= 0.99
-                #     print(f"decrease dice weight to {dice_weight}")
 
             print("lr", optimizer.param_groups[0]["lr"])
             lrs.append(optimizer.param_groups[0]["lr"])
-            if (no_improvement >= patience) & (opt_it > 100): #& (f == 2):
+            # if (no_improvement >= (patience//1.5)):
+            #     optimizer.param_groups[0]["lr"] *= 0.1 
+            if (no_improvement >= patience): #& (opt_it > 100): #& (f == 2):
 
-                if f <= 2:
+                if f == 1:
                     print(
                         f"No improvement in Dice and loss for {no_improvement} iterations and no bigger resolution, stopping.")
                     break
                 else:
-                    f = f - 2
-                    if f <= 2:
-                        f = 2
+                    f = f-1
+                    # if (f % 2) != 0:
+                    #     f=f - 1 
+                    if f <= 1:
+                        f = 1
+                        
+                    # if f <=4:
+                    #     lambda_alpha_bias *= 10.0
+                    #     print("increased lambda_alpha_bias")
                     res_it.append(opt_it)
-                    #dice_weight = inital_dice_weight
+                    dice_weight = inital_dice_weight
                     print(f"set to inital dice weight {dice_weight}")
                     best_simp_loss = torch.inf
+                    #lambda_alpha_bias *= 2.
+                    #alpha_param = alpha_param * 0.1
 
-                    new_res = list(old_resolution // f)
+                    last_alpha = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(old_resolution[0], old_resolution[1]), mode="bilinear").squeeze().detach().requires_grad_()
+
+                    scale_history.append(last_alpha)
+
+                    new_res = list(old_resolution // (2**f))
                     print(f"Make resolution bigger at iteration {opt_it}. New resolution is {new_res}.")
-                    alpha_param = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(
-                        new_res[0], new_res[1]), mode="bilinear").squeeze().detach().requires_grad_()
+                    alpha_param = torch.full(
+                        new_res, inital_alpha, requires_grad=True, device=self.device, dtype=torch.float)
+                    # alpha_param = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(
+                    #     new_res[0], new_res[1]), mode="nearest").squeeze().detach().requires_grad_()
 
+                    #lr = lr * 0.000001
                     optimizer = make_optimizer([alpha_param])
-                    #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=20, threshold=1e-5, threshold_mode="abs")
+                    #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=40, threshold=1e-15, threshold_mode="rel")
 
                     no_improvement = 0
                     continue
-
-            # if (opt_it % 500) == 0:
-            #     plt.figure(figsize=(12, 9))
-            #     plt_alpha = alpha.clone().detach().cpu().numpy()
-            #     a_min = plt_alpha.min()
-            #     plt.subplot(3, 3, 1)
-            #     plt.imshow(plt_alpha, cmap="hot")
-            #     plt.title(
-            #         f"alpha min {'{:.4f}'.format(a_min)}, max {'{:.4f}'.format(plt_alpha.max())}")
-            #     plt.colorbar()
-
-            #     # seg pres
-            #     (seg_pres_grad_alpha,) = autograd.grad(
-            #         seg_pres_loss,
-            #         alpha_param,
-            #         retain_graph=True,
-            #         create_graph=False
-            #     )
-
-            #     seg_pres_loss_grad = seg_pres_grad_alpha.detach().cpu().clone()
-            #     plt.subplot(3, 3, 4)
-            #     plt.imshow(seg_pres_loss_grad)
-            #     plt.colorbar()
-            #     plt.title(f"seg_pres loss, it {opt_it}")
-
-            #     # loss_alpha
-            #     (loss_alpha_alpha,) = autograd.grad(
-            #         loss_alpha,
-            #         alpha_param,
-            #         retain_graph=True,
-            #         create_graph=False
-            #     )
-
-            #     loss_alpha_grad = loss_alpha_alpha.detach().cpu().clone()
-            #     plt.subplot(3, 3, 5)
-            #     plt.imshow(loss_alpha_grad)
-            #     plt.colorbar()
-            #     plt.title(
-            #         f"alpha loss, it {opt_it}, min {'{:.8f}'.format(loss_alpha_grad.min())}, max {'{:.8f}'.format(loss_alpha_grad.max())}")
-            #     print("loss_alpha_grad min, max",
-            #           loss_alpha_grad.min(), loss_alpha_grad.max())
-            #     # loss_alpha_bias
-            #     (loss_alpha_bias_alpha,) = autograd.grad(
-            #         loss_alpha_bias,
-            #         alpha_param,
-            #         retain_graph=True,
-            #         create_graph=False
-            #     )
-
-            #     loss_alpha_bias_grad = loss_alpha_bias_alpha.detach().cpu().clone()
-            #     plt.subplot(3, 3, 6)
-            #     plt.imshow(loss_alpha_bias_grad)
-            #     plt.colorbar()
-            #     plt.title(f"alpha bias loss, it {opt_it}")
-
-            #     # loss_tv
-            #     (loss_tv_alpha,) = autograd.grad(
-            #         loss_tv,
-            #         alpha_param,
-            #         retain_graph=True,
-            #         create_graph=False
-            #     )
-
-            #     loss_tv_grad = loss_tv_alpha.detach().cpu().clone()
-            #     plt.subplot(3, 3, 7)
-            #     plt.imshow(loss_tv_grad)
-            #     plt.colorbar()
-            #     plt.title(f"tv loss, it {opt_it}")
-
-            #     # add gradients up
-            #     manual_loss_grad = dice_weight * seg_pres_loss_grad + \
-            #         loss_alpha_grad + loss_alpha_bias_grad + loss_tv_grad
-
-            #     plt.subplot(3, 3, 8)
-            #     plt.imshow(manual_loss_grad.cpu().detach())
-            #     plt.colorbar()
-            #     plt.title(f"manual_loss, it {opt_it}")
-
-            if alpha_param.grad is not None:
-                loss_grad = alpha_param.grad.detach().cpu().clone()
-                grad_history.append(loss_grad)
-                alpha_history.append(alpha.detach().cpu().clone())
-
-            # if (opt_it % 500) == 0:
-            #     plt.subplot(3, 3, 9)
-            #     plt.imshow(loss_grad)
-            #     plt.colorbar()
-            #     plt.title(f"loss_grad it {opt_it}")
-            #     plt.tight_layout()
-            #     plt.show()
 
             if isinstance(optimizer, torch.optim.LBFGS):
                 optimizer.step(closure)
             else:
                 optimizer.step()
             #scheduler.step(loss_for_scheduler)
-            with torch.no_grad():
-                alpha_param.clamp_(0.0, 1.0)
+            # with torch.no_grad():
+            #     alpha_param.clamp_(0.0, 1.0)
         print("increase res it", res_it)
 
-        # plt.plot(log_losses["hard_dice_loss"],
-        #          label="hard_dice_loss", alpha=0.7)
-
-        
         plt.plot(log_losses["seg_pres_loss"], label="seg_pres_loss", alpha=0.7)
         plt.plot(log_losses["raw_seg_pres_loss"], label="raw_seg_pres_loss", alpha=0.7)
         plt.plot(log_losses["loss_simplification"],
@@ -650,6 +580,7 @@ class SegmentRepairPipeline():
                  label="raw_seg_pres_loss", alpha=0.7)
         plt.plot([dice_er] * len(log_losses["raw_seg_pres_loss"]), label="dice_er", alpha=0.7)
         plt.plot([dice_er * 0.8] * len(log_losses["raw_seg_pres_loss"]), label="dice_er lower bound", alpha=0.7, linestyle="dashed")
+        plt.plot(ema_loss_history, alpha=0.7, label="moving_avg")
         plt.legend()
         plt.show()
 
@@ -676,7 +607,7 @@ class SegmentRepairPipeline():
             print("Procedure failed, did not find a good alpha.")
             #return 
 
-        return best_repaired_img, best_out_repaired, best_alpha, best_seg_pres_loss, best_simp_loss, best_total_loss, grad_history, alpha_history
+        return best_repaired_img, best_out_repaired, best_alpha, best_seg_pres_loss, best_simp_loss, best_total_loss, grad_history, alpha_history, log_losses
 
     def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, lambda_alpha_bias=0.1, inital_alpha=0.0, lambda_magnitude_edge_weight= 1.0, inital_dice_weight=0.01, patience=10):
 
@@ -688,6 +619,7 @@ class SegmentRepairPipeline():
         self.all_alphas = [] # all alpha masks for repaired images
         self.all_grad_histories = []
         self.all_alpha_history = []
+        self.all_log_losses = []
 
         last_simp_img = self.img
         last_simp_img = last_simp_img.to(self.device)
@@ -710,7 +642,7 @@ class SegmentRepairPipeline():
             # segmentation preservation loss is not good enough, so we need to repair the simplified image
             if seg_pres_loss > dice_er:
                 print("do repairing")
-                best_rep_img, best_out_repaired, rep_alpha, rep_seg_pres_loss, rep_simp_loss, rep_total_loss, grad_history, alpha_history = self._optimize_alpha_multi_res(
+                best_rep_img, best_out_repaired, rep_alpha, rep_seg_pres_loss, rep_simp_loss, rep_total_loss, grad_history, alpha_history, log_losses = self._optimize_alpha_multi_res(
                                 inital_alpha=inital_alpha,
                                 last_simp_img= last_simp_img, 
                                 simp_img= simp_img, 
@@ -740,6 +672,7 @@ class SegmentRepairPipeline():
                 self.all_alphas.append(rep_alpha.detach().cpu())
                 self.all_grad_histories.append(grad_history)
                 self.all_alpha_history.append(alpha_history)
+                self.all_log_losses.append(log_losses)
                 
                 plt.figure(figsize=(15, 5))
                 plt.subplot(1,3,1)
@@ -779,5 +712,6 @@ class SegmentRepairPipeline():
                 "all_seg_rep": self.all_seg_rep,
                 "all_alphas": self.all_alphas,
                 "all_grad_histories": self.all_grad_histories,
-                "all_alpha_history": self.all_alpha_history}
+                "all_alpha_history": self.all_alpha_history,
+                "all_log_losses": self.all_log_losses}
     
