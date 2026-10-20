@@ -43,11 +43,25 @@ class SegmentRepairPipeline():
         self.all_simp_imgs = None
         self.all_seg_simp = None
 
-    def _get_output(self, image, use_grad):
+    def _get_output(self, image, use_grad, noise=False, rand_noise=None):
         if image.dim() == 3:
             image = image.unsqueeze(0)
+
+        if noise:
+            if rand_noise:
+                if torch.rand(1) < rand_noise:
+                    print("add random noise")
+                    noise = torch.rand(image.shape) * 0.1 # * 0.05
+                    image = image + noise.to(image.device)
+                else:
+                    print("no noise this time")
+            else:
+                noise = torch.rand(image.shape) * 0.1
+                image = image + noise.to(image.device)
+
         normalized_img = F.normalize(image, mean=(
             0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)).to(self.device)
+    
 
         if use_grad:
             normalized_img = normalized_img.requires_grad_(True)
