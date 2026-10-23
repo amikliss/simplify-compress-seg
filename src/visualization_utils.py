@@ -45,15 +45,24 @@ def visualizeSimplification(simpDict:dict,
     fig.suptitle("Iteration 0")
 
     #prepare inputs for plotting
-    input = torch.moveaxis(simpDict["org_input"], 0, 2)
+    
     reference_seg = simpDict["ref_seg"].argmax(0)
 
-    simp_imgs = np.asarray([torch.moveaxis(img.squeeze(), 0, -1)
-                           for img in simpDict["all_simp_imgs"]])
-    simp_segs = simpDict["all_simp_seg"]
-    
-    rep_imgs = np.asarray([torch.moveaxis(img.squeeze(), 0, -1)
+    if simpDict["org_input"].shape[0] == 3:
+        input = torch.moveaxis(simpDict["org_input"], 0, 2)
+        simp_imgs = np.asarray([torch.moveaxis(img.squeeze(), 0, -1)
+                            for img in simpDict["all_simp_imgs"]])
+        rep_imgs = np.asarray([torch.moveaxis(img.squeeze(), 0, -1)
                             for img in simpDict["all_rep_imgs"]])
+    else:
+        input = simpDict["org_input"][0]
+        simp_imgs = np.asarray([img.squeeze()
+                            for img in simpDict["all_simp_imgs"]])
+        rep_imgs = np.asarray([img.squeeze()
+                            for img in simpDict["all_rep_imgs"]])
+    
+    simp_segs = simpDict["all_simp_seg"]
+
     rep_segs = simpDict["all_seg_rep"]
     
     #first frame
