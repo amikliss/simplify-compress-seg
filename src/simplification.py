@@ -30,9 +30,22 @@ class WaveletSimplification(SimplificationStrategy):
 
     def simplify(self, image):
         print(image.shape)
-        hsv_image = rgb2hsv(image.permute(1, 2, 0).cpu().numpy())
-        value = hsv_image[:, :, 2]
 
+        channels = image.shape[0]
+
+        assert (image.shape[0] == 3) | (image.shape[0] == 1), f"input an image of shape c x w x h. Channels can be 3 for rgb or 1 for grayscale. Current shape is {image.shape}" 
+
+
+        # if rgb image, transform to hsv and use value channel
+        if(channels == 3):
+            hsv_image = rgb2hsv(image.permute(1, 2, 0).cpu().numpy())
+            value = hsv_image[:, :, 2]
+        elif(channels == 1):
+            value = image.cpu().squeeze()
+        else:
+            raise Exception(f"We need an RGB input with shape CxWxH or an grayscale image with WxH. Current shape is {image.shape}")
+            
+        print("value", value.shape)
         coeffs = pywt.wavedec2(value, self.wavelet, level=self.levels)
         coeffs_arr, coeff_slices = pywt.coeffs_to_array(coeffs)
 
@@ -41,18 +54,31 @@ class WaveletSimplification(SimplificationStrategy):
             f"Soft thresholding with lambda={self.lamb}. For new lambda reinitalize the WaveletSimplification class")
         coeffs_arr_thr = np.sign(coeffs_arr) * \
             np.maximum(np.abs(coeffs_arr) - self.lamb, 0.0)
-        self.lamb += self.lamb_mul
+        self.lamb *= self.lamb_mul
 
         # Reconstruct image from thresholded coefficients
         coeffs_thresholded = pywt.array_to_coeffs(
             coeffs_arr_thr, coeff_slices, output_format='wavedec2')
         comp_value = pywt.waverec2(coeffs_thresholded, self.wavelet)
-        hsv_image[:, :, 2] = comp_value
 
-        # back to RGB
-        simplified_image = hsv2rgb(hsv_image)
-        simplified_image = torch.from_numpy(simplified_image).permute(
-            2, 0, 1).to(image.device).float()
+        print("value min", comp_value.min())
+        print("value max", comp_value.max())
+
+        if channels == 3:
+            simplified_image = np.clip(comp_value, 0, comp_value.max())
+            hsv_image[:, :, 2] = simplified_image
+
+            # back to RGB
+            print("value min", comp_value.min())
+            print("value max", comp_value.max())
+            simplified_image = hsv2rgb(hsv_image)
+        
+            simplified_image = simplified_image.transpose(2, 0, 1)
+        else:
+            simplified_image = comp_value
+            simplified_image = np.expand_dims(simplified_image, 0)
+        
+        simplified_image = torch.from_numpy(simplified_image).to(image.device).float()
         return simplified_image.to(image.device)
 
 

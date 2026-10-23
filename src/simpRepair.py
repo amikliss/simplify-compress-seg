@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Callable, Optional
 import torch
 import torchvision.transforms.functional as F
 from torch.nn.functional import pad, conv2d, interpolate
@@ -17,23 +17,25 @@ class SegmentRepairPipeline():
                 img, 
                 strategy: Optional[SimplificationStrategy],
                 lr_opt = 0.01,
-                seg_pres_loss = "margin"):
+                seg_pres_loss = "margin",
+                model_output_fn: Optional[
+                    Callable[[torch.nn.Module, torch.Tensor], torch.Tensor]
+                ] = None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = model.to(self.device)
         self.model.eval()
         self.img = img
         self.simp_strategy = strategy
         self.lr_opt = lr_opt
+        self.model_output_fn = model_output_fn
+
+        assert len(self.img.shape) == 3, f"input shape should be channels x width x height. Current shape is {self.img.shape}."
+        assert (self.img.shape[0] == 1) or (self.img.shape[0] == 3), f"first dimension should be channels. Channel should be 1 for grayscale and 3 for rgb images. Current shape is {self.img}." 
 
         self.reference_output = self._get_output(self.img, use_grad=False)
         self.reference_output_hard = self.reference_output.argmax(dim=0).long()
 
         self.median_filter = MedianPool2d(kernel_size=35, stride=1, same=True)
-
-        self.img_magnitude = self._compute_img_magnitude(self.img)
-
-        plt.imshow(self.img_magnitude.cpu().numpy())
-        plt.show()
 
         assert seg_pres_loss in ["maximize", "soft_dice", "margin"], "Choose a seg_pres_los! Options are: 'maximize', soft_dice', 'margin'."
 
@@ -44,6 +46,11 @@ class SegmentRepairPipeline():
         self.all_seg_simp = None
 
     def _get_output(self, image, use_grad, noise=False, rand_noise=None):
+        """Return class probabilities with shape (C, H, W).
+
+        A custom model_output_fn receives the model and a batched image tensor,
+        and must return a differentiable probability tensor shaped (B, C, H, W).
+        """
         if image.dim() == 3:
             image = image.unsqueeze(0)
 
@@ -59,16 +66,23 @@ class SegmentRepairPipeline():
                 noise = torch.rand(image.shape) * 0.1
                 image = image + noise.to(image.device)
 
-        normalized_img = F.normalize(image, mean=(
-            0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)).to(self.device)
-    
-
-        if use_grad:
-            normalized_img = normalized_img.requires_grad_(True)
+        image = image.to(self.device)
         with torch.set_grad_enabled(use_grad):
-            output = self.model(normalized_img)['out']
-        output = torch.nn.functional.softmax(output, dim=1).squeeze()
-        return output
+            if self.model_output_fn is not None:
+                if use_grad:
+                    image = image.requires_grad_(True)
+                output = self.model_output_fn(self.model, image)
+            else:
+                normalized_img = F.normalize(
+                    image,
+                    mean=(0.485, 0.456, 0.406),
+                    std=(0.229, 0.224, 0.225),
+                )
+                if use_grad:
+                    normalized_img = normalized_img.requires_grad_(True)
+                output = self.model(normalized_img)['out']
+                output = torch.nn.functional.softmax(output, dim=1)
+        return output.squeeze()
 
     def _tv_loss(self,img):
         """Compute the total variation loss of an image."""
@@ -282,6 +296,7 @@ class SegmentRepairPipeline():
         inital_dice_weight = dice_weight
 
         old_resolution = torch.tensor(last_simp_img[0].shape)
+        print("old resolution", old_resolution)
         f = 4
         new_res = list(old_resolution // (2**f))
 
@@ -381,11 +396,17 @@ class SegmentRepairPipeline():
                 # alpha = interpolate(alpha_param.unsqueeze(0).unsqueeze(0), size=(
                 #     old_resolution[0], old_resolution[1]), mode="bilinear").squeeze()
 
-                a_stacked = torch.stack([summed_alphas] * 3, dim=0).to(self.device)
+                print("last_simp_img shape", last_simp_img.shape)
+                # stack alpha mask if we have an rgb image
+                if last_simp_img.shape[0] == 3:
+                    a = torch.stack([summed_alphas] * 3, dim=0).to(self.device)
+                else:
+                    a = summed_alphas
+                
 
 
                 repaired_img = last_simp_img * \
-                    (1 - a_stacked) + simp_img * a_stacked
+                    (1 - a) + simp_img * a
 
                 out_repaired = self._get_output(
                     repaired_img, use_grad=True, noise = True, rand_noise=0.6)
@@ -637,6 +658,7 @@ class SegmentRepairPipeline():
 
             seg_pres_loss = self._segmentation_preservation_loss_margin(out_simp)
             print("seg pres loss", seg_pres_loss)
+
 
 
             # segmentation preservation loss is not good enough, so we need to repair the simplified image
