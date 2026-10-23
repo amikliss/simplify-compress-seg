@@ -119,6 +119,17 @@ class Uniform_Image(SimplificationStrategy):
         img = torch.stack([r_a, g_a, b_a])
 
         return img
+    
+class Black_Image(SimplificationStrategy):
+
+    def __init__(self):
+        self.name = "black_image"
+
+    def simplify(self, image):
+
+        img = torch.zeros_like(image)
+
+        return img
 
 
 class Uniform_Background(SimplificationStrategy):
