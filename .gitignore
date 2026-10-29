@@ -1,6 +1,7 @@
 .vscode/
 *.gif
 *.mp4
+*.tiff
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
