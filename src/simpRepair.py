@@ -509,14 +509,22 @@ class SegmentRepairPipeline():
 
             if weight_cooldown > 0:
                 weight_cooldown -= 1
-            elif ema_loss > (dice_er - 0.00001):
+            elif ema_loss > (dice_er - 0.0001):
                 error_ratio = ema_loss / dice_er
 
-                growth = min(error_ratio, 1.5)
+                growth = min(error_ratio, 10.0)
 
-                dice_weight = min(dice_weight * growth, 10000) # min(dice_weight * growth, 10000000.0) 
+                dice_weight = min(dice_weight * growth, 1e+18) # min(dice_weight * growth, 10000000.0) 
                 weight_cooldown = weight_update_interval
                 print(f"increase dice weight to {dice_weight}")
+            elif ema_loss < (dice_er * 0.8):
+                error_ratio = ema_loss / (dice_er * 0.8)
+                
+                growth = max(error_ratio, 0.5)
+
+                dice_weight = max(dice_weight * growth, 0.1) # max(dice_weight * growth, 0.1)
+                weight_cooldown = weight_update_interval
+                print(f"decrease dice weight to {dice_weight}")
 
             print("lr", optimizer.param_groups[0]["lr"])
             lrs.append(optimizer.param_groups[0]["lr"])
