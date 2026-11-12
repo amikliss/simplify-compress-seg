@@ -251,7 +251,7 @@ class SegmentRepairPipeline():
 
         return pres_loss.mean()
     
-    def _calculate_loss(self, x, alpha, x_output, reference_output, lambda_tv, lambda_alpha, lambda_alpha_bias, dice_weight=0.1, magnitude_edge_weight=1.0):
+    def _calculate_loss(self, x, alpha, x_output, reference_output, lambda_tv, lambda_alpha, lambda_alpha_bias, seg_pres_weight=0.1, magnitude_edge_weight=1.0):
         """
                 Calculate the total loss for the repairing step, which includes the Dice loss, total variation loss, and the alpha term.
 
@@ -281,19 +281,19 @@ class SegmentRepairPipeline():
         loss_simplification += loss_alpha_bias
         loss_simplification += loss_tv
 
-        #loss = dice_weight * dice_loss + loss_simplification
-        loss = dice_weight * seg_pres_loss + loss_simplification
+        #loss = seg_pres_weight * dice_loss + loss_simplification
+        loss = seg_pres_weight * seg_pres_loss + loss_simplification
 
         return loss, seg_pres_loss, dice_loss, hard_dice_loss, loss_simplification, -loss_alpha_simp, loss_alpha_bias, loss_tv
     
     
-    def _optimize_alpha_multi_res(self, inital_alpha, last_simp_img, simp_img, lambda_tv, lambda_alpha, lambda_alpha_bias, lambda_magnitude_edge_weight, dice_er, dice_weight=0.1, max_it_opt=500, patience=10):
+    def _optimize_alpha_multi_res(self, inital_alpha, last_simp_img, simp_img, lambda_tv, lambda_alpha, lambda_alpha_bias, lambda_magnitude_edge_weight, dice_er, seg_pres_weight=0.1, max_it_opt=500, patience=10):
 
         # prepare alpha parameter for optimization
 
         lr = self.lr_opt
 
-        inital_dice_weight = dice_weight
+        initial_seg_pres_weight = seg_pres_weight
 
         old_resolution = torch.tensor(last_simp_img[0].shape)
         print("old resolution", old_resolution)
@@ -421,7 +421,7 @@ class SegmentRepairPipeline():
                     lambda_tv=lambda_tv,
                     lambda_alpha=lambda_alpha,
                     lambda_alpha_bias=lambda_alpha_bias,
-                    dice_weight=dice_weight,
+                    seg_pres_weight=seg_pres_weight,
                     magnitude_edge_weight=lambda_magnitude_edge_weight)
                 losses[0].backward(retain_graph=True)
                 closure_state.update(
@@ -444,14 +444,14 @@ class SegmentRepairPipeline():
             log_losses["total_loss"].append(loss.item())
             log_losses["hard_dice_loss"].append(hard_dice_loss.item())
             log_losses["seg_pres_loss"].append(
-                dice_weight * seg_pres_loss.item())
+                seg_pres_weight * seg_pres_loss.item())
             log_losses["raw_seg_pres_loss"].append(seg_pres_loss.item())
             log_losses["loss_simplification"].append(
                 loss_simplification.item())
             log_losses["loss_alpha"].append(loss_alpha.item())
             log_losses["loss_alpha_bias"].append(loss_alpha_bias.item())
             log_losses["loss_tv"].append(loss_tv.item())
-            log_losses["seg_pres_weight"].append(dice_weight)
+            log_losses["seg_pres_weight"].append(seg_pres_weight)
 
             print("seg_pres_loss", seg_pres_loss)
 
@@ -514,17 +514,17 @@ class SegmentRepairPipeline():
 
                 growth = min(error_ratio, 10.0)
 
-                dice_weight = min(dice_weight * growth, 1e+18) # min(dice_weight * growth, 10000000.0) 
+                seg_pres_weight = min(seg_pres_weight * growth, 1e+18) # min(seg_pres_weight * growth, 10000000.0) 
                 weight_cooldown = weight_update_interval
-                print(f"increase dice weight to {dice_weight}")
+                print(f"increase segmentation preservation loss weight to {seg_pres_weight}")
             elif ema_loss < (dice_er * 0.8):
                 error_ratio = ema_loss / (dice_er * 0.8)
                 
                 growth = max(error_ratio, 0.5)
 
-                dice_weight = max(dice_weight * growth, 0.1) # max(dice_weight * growth, 0.1)
+                seg_pres_weight = max(seg_pres_weight * growth, 0.1) # max(seg_pres_weight * growth, 0.1)
                 weight_cooldown = weight_update_interval
-                print(f"decrease dice weight to {dice_weight}")
+                print(f"decrease segmentation preservation loss weight to {seg_pres_weight}")
 
             print("lr", optimizer.param_groups[0]["lr"])
             lrs.append(optimizer.param_groups[0]["lr"])
@@ -547,8 +547,8 @@ class SegmentRepairPipeline():
                     #     lambda_alpha_bias *= 10.0
                     #     print("increased lambda_alpha_bias")
                     res_it.append(opt_it)
-                    dice_weight = inital_dice_weight
-                    print(f"set to inital dice weight {dice_weight}")
+                    seg_pres_weight = initial_seg_pres_weight
+                    print(f"set to initial segmentation preservation loss weight {seg_pres_weight}")
                     best_simp_loss = torch.inf
                     best_progress_simp_loss = torch.inf
                     #lambda_alpha_bias *= 2.
@@ -637,7 +637,7 @@ class SegmentRepairPipeline():
 
         return best_repaired_img, best_out_repaired, best_alpha, best_seg_pres_loss, best_simp_loss, best_total_loss, grad_history, alpha_history, log_losses
     
-    def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, lambda_alpha_bias=0.1, inital_alpha=0.0, lambda_magnitude_edge_weight= 1.0, inital_dice_weight=0.01, patience=10):
+    def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, lambda_alpha_bias=0.1, inital_alpha=0.0, lambda_magnitude_edge_weight= 1.0, initial_seg_pres_weight=0.01, patience=10):
 
         # save intermediate results
         self.all_simp_imgs = [] # all simplified images (before repair)
@@ -680,7 +680,7 @@ class SegmentRepairPipeline():
                                 lambda_alpha_bias=lambda_alpha_bias,
                                 lambda_magnitude_edge_weight=lambda_magnitude_edge_weight,
                                 dice_er=dice_er, 
-                                dice_weight=inital_dice_weight,
+                                seg_pres_weight=initial_seg_pres_weight,
                                 max_it_opt=max_it_opt,
                                 patience=patience)
                 
