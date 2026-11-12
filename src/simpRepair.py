@@ -347,6 +347,7 @@ class SegmentRepairPipeline():
         best_total_loss = torch.inf
         best_seg_pres_loss = None
         no_improvement = 0
+        best_progress_simp_loss = torch.inf
         best_iteration = None
         scale_history = []
 
@@ -460,34 +461,31 @@ class SegmentRepairPipeline():
                 alpha_history.append(alpha.detach().cpu().clone())
 
             print("iteration", opt_it, "loss simplification", loss_simplification, "best simp loss", best_simp_loss, " at iteration", best_iteration)
-            if (loss_simplification <= best_simp_loss):  # and (opt_it > 100):
+            current_simp_loss = loss_simplification.detach().item()
+            if current_simp_loss < best_progress_simp_loss - 1e-4:
+                best_progress_simp_loss = current_simp_loss
+                no_improvement = 0
+            else:
+                no_improvement += 1
+
+            if seg_pres_loss <= dice_er and loss_simplification < best_simp_loss:
                 print("iteration", opt_it, "seg_pres_loss", seg_pres_loss)
 
                 print("diff best simp and current simp",
                       loss_simplification - best_simp_loss)
-                
-                if abs(loss_simplification - best_simp_loss) < 1e-4:
-                    no_improvement += 1
-                else:
-                    no_improvement = 0
-                if seg_pres_loss <= dice_er:
-                    best_seg_pres_loss = seg_pres_loss
-                    best_simp_loss = loss_simplification
-                    best_total_loss = loss
-                    best_repaired_img = repaired_img.clone().detach()
-                    best_alpha = alpha.clone().detach()
-                    best_alpha_param = alpha_param.clone().detach()
-                    best_out_repaired = out_repaired.clone().detach()
-                    best_iteration = opt_it
-                    log_losses["best_loss_history"].append(opt_it)
-                else:
-                    print(
-                        f"seg_pres_loss {seg_pres_loss} is not good enough, not saving best loss")
-                    
-                
-            else:
-                #if opt_it > 100:
-                no_improvement += 1
+
+                best_seg_pres_loss = seg_pres_loss
+                best_simp_loss = loss_simplification
+                best_total_loss = loss
+                best_repaired_img = repaired_img.clone().detach()
+                best_alpha = alpha.clone().detach()
+                best_alpha_param = alpha_param.clone().detach()
+                best_out_repaired = out_repaired.clone().detach()
+                best_iteration = opt_it
+                log_losses["best_loss_history"].append(opt_it)
+            elif seg_pres_loss > dice_er:
+                print(
+                    f"seg_pres_loss {seg_pres_loss} is not good enough, not saving best loss")
 
 
             print("no_improvement", no_improvement)
@@ -544,6 +542,7 @@ class SegmentRepairPipeline():
                     dice_weight = inital_dice_weight
                     print(f"set to inital dice weight {dice_weight}")
                     best_simp_loss = torch.inf
+                    best_progress_simp_loss = torch.inf
                     #lambda_alpha_bias *= 2.
                     #alpha_param = alpha_param * 0.1
 
@@ -629,7 +628,7 @@ class SegmentRepairPipeline():
             #return 
 
         return best_repaired_img, best_out_repaired, best_alpha, best_seg_pres_loss, best_simp_loss, best_total_loss, grad_history, alpha_history, log_losses
-
+    
     def do_simplification_procedure(self, max_simp_it=20, max_it_opt=500, dice_er=0.01, lambda_tv=0.8, lambda_alpha=0.1, lambda_alpha_bias=0.1, inital_alpha=0.0, lambda_magnitude_edge_weight= 1.0, inital_dice_weight=0.01, patience=10):
 
         # save intermediate results
