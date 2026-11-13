@@ -30,7 +30,7 @@ class SegmentRepairPipeline():
         self.model_output_fn = model_output_fn
 
         assert len(self.img.shape) == 3, f"input shape should be channels x width x height. Current shape is {self.img.shape}."
-        assert (self.img.shape[0] == 1) or (self.img.shape[0] == 3), f"first dimension should be channels. Channel should be 1 for grayscale and 3 for rgb images. Current shape is {self.img}." 
+        assert (self.img.shape[0] == 1) or (self.img.shape[0] == 3), f"first dimension should be channels. Channel should be 1 for grayscale and 3 for rgb images. Current shape is {self.img.shape}." 
 
         self.reference_output = self._get_output(self.img, use_grad=False)
         self.reference_output_hard = self.reference_output.argmax(dim=0).long()
