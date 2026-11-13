@@ -195,7 +195,7 @@ class SegmentRepairPipeline():
         else:
             ref_labels = reference_output.long()
 
-        num_classes = 21
+        num_classes = x_output.shape[0]
         pred_one_hot = self._to_one_hot(pred_labels, num_classes)
         ref_one_hot = self._to_one_hot(ref_labels, num_classes)
 
